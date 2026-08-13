@@ -5,12 +5,17 @@ from pathlib import Path
 
 import pandas as pd
 
-from data_processing import DEFAULT_SEQUENCE_LENGTH, load_product_sales, prepare_lstm_data
-from event_intelligence import calculate_event_adjustment, get_upcoming_event
-from model import load_model
+from ml.data_processing import (
+    DEFAULT_SEQUENCE_LENGTH,
+    load_product_sales,
+    prepare_lstm_data,
+)
+from ml.event_intelligence import calculate_event_adjustment, get_upcoming_event
+from ml.model import load_model
 
 
-MODELS_DIRECTORY = Path("data") / "models"
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+MODELS_DIRECTORY = PROJECT_ROOT / "data" / "models"
 
 
 def forecast_product(product_id, forecast_date):
