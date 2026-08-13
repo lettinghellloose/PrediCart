@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import tensorflow as tf
 
-from data_processing import DEFAULT_SEQUENCE_LENGTH, prepare_lstm_data
+from ml.data_processing import DEFAULT_SEQUENCE_LENGTH, prepare_lstm_data
 
 
 DEFAULT_EPOCHS = 20

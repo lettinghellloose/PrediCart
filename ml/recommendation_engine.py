@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 import sqlite3
 
-from forecast import forecast_product
+from ml.forecast import forecast_product
 
 
 DATABASE_PATH = Path("data") / "predicart.db"
