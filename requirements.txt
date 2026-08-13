@@ -1,7 +1,0 @@
-numpy
-pandas
-faker
-scikit-learn
-tensorflow
-joblib
-matplotlib
