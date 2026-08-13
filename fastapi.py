@@ -1,0 +1,1303 @@
+from datetime import date
+
+from typing import Optional
+
+
+
+from fastapi import FastAPI, HTTPException
+
+from fastapi.middleware.cors import CORSMiddleware
+
+from pydantic import BaseModel
+
+
+
+import sqlite3
+
+
+
+
+
+# ============================================================
+
+# APP
+
+# ============================================================
+
+
+
+app = FastAPI(
+
+    title="PrediCart API",
+
+    description="AI Demand Forecasting & Inventory Planning",
+
+    version="1.0.0"
+
+)
+
+
+
+# Allow React frontend to communicate with FastAPI
+
+app.add_middleware(
+
+    CORSMiddleware,
+
+    allow_origins=["*"],  # For hackathon/demo
+
+    allow_credentials=True,
+
+    allow_methods=["*"],
+
+    allow_headers=["*"],
+
+)
+
+
+
+
+
+DATABASE = "predictcart.db"
+
+
+
+
+
+# ============================================================
+
+# DATABASE
+
+# ============================================================
+
+
+
+def get_db():
+
+    conn = sqlite3.connect(DATABASE)
+
+    conn.row_factory = sqlite3.Row
+
+    return conn
+
+
+
+
+
+def init_db():
+
+    conn = get_db()
+
+    cursor = conn.cursor()
+
+
+
+    cursor.execute("""
+
+        CREATE TABLE IF NOT EXISTS products (
+
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+            name TEXT NOT NULL,
+
+            category TEXT
+
+        )
+
+    """)
+
+
+
+    cursor.execute("""
+
+        CREATE TABLE IF NOT EXISTS sales (
+
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+            product_id INTEGER NOT NULL,
+
+            sale_date TEXT NOT NULL,
+
+            quantity INTEGER NOT NULL,
+
+            FOREIGN KEY(product_id) REFERENCES products(id)
+
+        )
+
+    """)
+
+
+
+    cursor.execute("""
+
+        CREATE TABLE IF NOT EXISTS inventory (
+
+            product_id INTEGER PRIMARY KEY,
+
+            current_stock INTEGER NOT NULL DEFAULT 0,
+
+            incoming_stock INTEGER NOT NULL DEFAULT 0,
+
+            safety_stock INTEGER NOT NULL DEFAULT 0,
+
+            FOREIGN KEY(product_id) REFERENCES products(id)
+
+        )
+
+    """)
+
+
+
+    cursor.execute("""
+
+        CREATE TABLE IF NOT EXISTS events (
+
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+            event_date TEXT NOT NULL,
+
+            event_name TEXT NOT NULL,
+
+            event_type TEXT,
+
+            impact REAL DEFAULT 0
+
+        )
+
+    """)
+
+
+
+    conn.commit()
+
+    conn.close()
+
+
+
+
+
+init_db()
+
+
+
+
+
+# ============================================================
+
+# PYDANTIC SCHEMAS
+
+# ============================================================
+
+
+
+class ProductCreate(BaseModel):
+
+    name: str
+
+    category: Optional[str] = None
+
+
+
+
+
+class SaleCreate(BaseModel):
+
+    product_id: int
+
+    quantity: int
+
+    sale_date: Optional[str] = None
+
+
+
+
+
+class InventoryUpdate(BaseModel):
+
+    product_id: int
+
+    current_stock: int
+
+    incoming_stock: int = 0
+
+    safety_stock: int = 0
+
+
+
+
+
+class EventCreate(BaseModel):
+
+    event_date: str
+
+    event_name: str
+
+    event_type: Optional[str] = None
+
+    impact: float = 0
+
+
+
+
+
+# ============================================================
+
+# HEALTH CHECK
+
+# ============================================================
+
+
+
+@app.get("/")
+
+def root():
+
+    return {
+
+        "message": "PrediCart API is running",
+
+        "status": "ok"
+
+    }
+
+
+
+
+
+@app.get("/health")
+
+def health():
+
+    return {
+
+        "status": "healthy"
+
+    }
+
+
+
+
+
+# ============================================================
+
+# PRODUCTS
+
+# ============================================================
+
+
+
+@app.post("/products")
+
+def create_product(product: ProductCreate):
+
+
+
+    conn = get_db()
+
+    cursor = conn.cursor()
+
+
+
+    cursor.execute(
+
+        """
+
+        INSERT INTO products (name, category)
+
+        VALUES (?, ?)
+
+        """,
+
+        (product.name, product.category)
+
+    )
+
+
+
+    product_id = cursor.lastrowid
+
+
+
+    # Create inventory record
+
+    cursor.execute(
+
+        """
+
+        INSERT INTO inventory
+
+        (product_id, current_stock, incoming_stock, safety_stock)
+
+        VALUES (?, 0, 0, 0)
+
+        """,
+
+        (product_id,)
+
+    )
+
+
+
+    conn.commit()
+
+    conn.close()
+
+
+
+    return {
+
+        "message": "Product created",
+
+        "product_id": product_id,
+
+        "name": product.name
+
+    }
+
+
+
+
+
+@app.get("/products")
+
+def get_products():
+
+
+
+    conn = get_db()
+
+
+
+    products = conn.execute(
+
+        """
+
+        SELECT *
+
+        FROM products
+
+        ORDER BY name
+
+        """
+
+    ).fetchall()
+
+
+
+    conn.close()
+
+
+
+    return [dict(product) for product in products]
+
+
+
+
+
+# ============================================================
+
+# SALES
+
+# ============================================================
+
+
+
+@app.post("/sales")
+
+def add_sale(sale: SaleCreate):
+
+
+
+    sale_date = sale.sale_date or str(date.today())
+
+
+
+    conn = get_db()
+
+
+
+    # Check product
+
+    product = conn.execute(
+
+        "SELECT * FROM products WHERE id = ?",
+
+        (sale.product_id,)
+
+    ).fetchone()
+
+
+
+    if not product:
+
+        conn.close()
+
+        raise HTTPException(
+
+            status_code=404,
+
+            detail="Product not found"
+
+        )
+
+
+
+    # Save sale
+
+    conn.execute(
+
+        """
+
+        INSERT INTO sales
+
+        (product_id, sale_date, quantity)
+
+        VALUES (?, ?, ?)
+
+        """,
+
+        (
+
+            sale.product_id,
+
+            sale_date,
+
+            sale.quantity
+
+        )
+
+    )
+
+
+
+    # Reduce current inventory
+
+    conn.execute(
+
+        """
+
+        UPDATE inventory
+
+        SET current_stock = current_stock - ?
+
+        WHERE product_id = ?
+
+        """,
+
+        (
+
+            sale.quantity,
+
+            sale.product_id
+
+        )
+
+    )
+
+
+
+    conn.commit()
+
+    conn.close()
+
+
+
+    return {
+
+        "message": "Sale recorded",
+
+        "product_id": sale.product_id,
+
+        "quantity": sale.quantity,
+
+        "date": sale_date
+
+    }
+
+
+
+
+
+@app.get("/sales/{product_id}")
+
+def get_sales(product_id: int):
+
+
+
+    conn = get_db()
+
+
+
+    sales = conn.execute(
+
+        """
+
+        SELECT *
+
+        FROM sales
+
+        WHERE product_id = ?
+
+        ORDER BY sale_date
+
+        """,
+
+        (product_id,)
+
+    ).fetchall()
+
+
+
+    conn.close()
+
+
+
+    return [dict(sale) for sale in sales]
+
+
+
+
+
+# ============================================================
+
+# INVENTORY
+
+# ============================================================
+
+
+
+@app.put("/inventory")
+
+def update_inventory(inventory: InventoryUpdate):
+
+
+
+    conn = get_db()
+
+
+
+    product = conn.execute(
+
+        "SELECT * FROM products WHERE id = ?",
+
+        (inventory.product_id,)
+
+    ).fetchone()
+
+
+
+    if not product:
+
+        conn.close()
+
+        raise HTTPException(
+
+            status_code=404,
+
+            detail="Product not found"
+
+        )
+
+
+
+    conn.execute(
+
+        """
+
+        INSERT INTO inventory
+
+        (product_id, current_stock, incoming_stock, safety_stock)
+
+        VALUES (?, ?, ?, ?)
+
+        ON CONFLICT(product_id)
+
+        DO UPDATE SET
+
+            current_stock = excluded.current_stock,
+
+            incoming_stock = excluded.incoming_stock,
+
+            safety_stock = excluded.safety_stock
+
+        """,
+
+        (
+
+            inventory.product_id,
+
+            inventory.current_stock,
+
+            inventory.incoming_stock,
+
+            inventory.safety_stock
+
+        )
+
+    )
+
+
+
+    conn.commit()
+
+    conn.close()
+
+
+
+    return {
+
+        "message": "Inventory updated",
+
+        "product_id": inventory.product_id
+
+    }
+
+
+
+
+
+@app.get("/inventory")
+
+def get_inventory():
+
+
+
+    conn = get_db()
+
+
+
+    inventory = conn.execute(
+
+        """
+
+        SELECT
+
+            i.product_id,
+
+            p.name,
+
+            i.current_stock,
+
+            i.incoming_stock,
+
+            i.safety_stock
+
+        FROM inventory i
+
+        JOIN products p
+
+        ON p.id = i.product_id
+
+        ORDER BY p.name
+
+        """
+
+    ).fetchall()
+
+
+
+    conn.close()
+
+
+
+    return [dict(item) for item in inventory]
+
+
+
+
+
+# ============================================================
+
+# EVENTS
+
+# ============================================================
+
+
+
+@app.post("/events")
+
+def create_event(event: EventCreate):
+
+
+
+    conn = get_db()
+
+
+
+    cursor = conn.cursor()
+
+
+
+    cursor.execute(
+
+        """
+
+        INSERT INTO events
+
+        (event_date, event_name, event_type, impact)
+
+        VALUES (?, ?, ?, ?)
+
+        """,
+
+        (
+
+            event.event_date,
+
+            event.event_name,
+
+            event.event_type,
+
+            event.impact
+
+        )
+
+    )
+
+
+
+    event_id = cursor.lastrowid
+
+
+
+    conn.commit()
+
+    conn.close()
+
+
+
+    return {
+
+        "message": "Event created",
+
+        "event_id": event_id
+
+    }
+
+
+
+
+
+@app.get("/events/upcoming")
+
+def upcoming_events():
+
+
+
+    today = str(date.today())
+
+
+
+    conn = get_db()
+
+
+
+    events = conn.execute(
+
+        """
+
+        SELECT *
+
+        FROM events
+
+        WHERE event_date >= ?
+
+        ORDER BY event_date
+
+        """,
+
+        (today,)
+
+    ).fetchall()
+
+
+
+    conn.close()
+
+
+
+    return [dict(event) for event in events]
+
+
+
+
+
+# ============================================================
+
+# FORECASTING
+
+# ============================================================
+
+
+
+def generate_forecast(product_id: int):
+
+
+
+    """
+
+    Replace this function with your actual LSTM prediction.
+
+
+
+    The LSTM module should:
+
+        1. Fetch historical sales
+
+        2. Preprocess the data
+
+        3. Create the input sequence
+
+        4. Load the trained model
+
+        5. Predict next week's demand
+
+    """
+
+
+
+    conn = get_db()
+
+
+
+    sales = conn.execute(
+
+        """
+
+        SELECT sale_date, quantity
+
+        FROM sales
+
+        WHERE product_id = ?
+
+        ORDER BY sale_date
+
+        """,
+
+        (product_id,)
+
+    ).fetchall()
+
+
+
+    conn.close()
+
+
+
+    if not sales:
+
+        return 0
+
+
+
+    # --------------------------------------------------------
+
+    # TEMPORARY MVP FORECAST
+
+    # --------------------------------------------------------
+
+    # Replace this with:
+
+    #
+
+    # prediction = lstm_model.predict(...)
+
+    #
+
+    # For now we use recent average demand.
+
+    # --------------------------------------------------------
+
+
+
+    recent_sales = [row["quantity"] for row in sales[-16:]]
+
+
+
+    forecast = sum(recent_sales) / len(recent_sales)
+
+
+
+    return round(forecast)
+
+
+
+
+
+@app.get("/forecast/{product_id}")
+
+def get_forecast(product_id: int):
+
+
+
+    conn = get_db()
+
+
+
+    product = conn.execute(
+
+        "SELECT * FROM products WHERE id = ?",
+
+        (product_id,)
+
+    ).fetchone()
+
+
+
+    conn.close()
+
+
+
+    if not product:
+
+        raise HTTPException(
+
+            status_code=404,
+
+            detail="Product not found"
+
+        )
+
+
+
+    forecast = generate_forecast(product_id)
+
+
+
+    return {
+
+        "product_id": product_id,
+
+        "product": product["name"],
+
+        "forecast": forecast,
+
+        "period": "next_week"
+
+    }
+
+
+
+
+
+# ============================================================
+
+# RECOMMENDATION
+
+# ============================================================
+
+
+
+def calculate_recommendation(
+
+    forecast: float,
+
+    current_stock: int,
+
+    incoming_stock: int,
+
+    safety_stock: int
+
+):
+
+
+
+    recommendation = (
+
+        forecast
+
+        + safety_stock
+
+        - current_stock
+
+        - incoming_stock
+
+    )
+
+
+
+    return max(0, round(recommendation))
+
+
+
+
+
+def generate_explanation(
+
+    forecast,
+
+    current_stock,
+
+    incoming_stock,
+
+    safety_stock,
+
+    event=None
+
+):
+
+
+
+    reasons = []
+
+
+
+    if event:
+
+        reasons.append(
+
+            f"{event['event_name']} is approaching"
+
+        )
+
+
+
+    if forecast > current_stock + incoming_stock:
+
+        reasons.append(
+
+            "available stock is below expected demand"
+
+        )
+
+
+
+    if safety_stock > 0:
+
+        reasons.append(
+
+            "safety stock is included in the calculation"
+
+        )
+
+
+
+    if not reasons:
+
+        reasons.append(
+
+            "current inventory is sufficient for expected demand"
+
+        )
+
+
+
+    return ". ".join(reasons) + "."
+
+
+
+
+
+# ============================================================
+
+# COMPLETE PREDICTCART RECOMMENDATION
+
+# ============================================================
+
+
+
+@app.get("/recommendation/{product_id}")
+
+def get_recommendation(product_id: int):
+
+
+
+    conn = get_db()
+
+
+
+    product = conn.execute(
+
+        """
+
+        SELECT *
+
+        FROM products
+
+        WHERE id = ?
+
+        """,
+
+        (product_id,)
+
+    ).fetchone()
+
+
+
+    if not product:
+
+        conn.close()
+
+        raise HTTPException(
+
+            status_code=404,
+
+            detail="Product not found"
+
+        )
+
+
+
+    inventory = conn.execute(
+
+        """
+
+        SELECT *
+
+        FROM inventory
+
+        WHERE product_id = ?
+
+        """,
+
+        (product_id,)
+
+    ).fetchone()
+
+
+
+    # Find nearest upcoming event
+
+    today = str(date.today())
+
+
+
+    event = conn.execute(
+
+        """
+
+        SELECT *
+
+        FROM events
+
+        WHERE event_date >= ?
+
+        ORDER BY event_date
+
+        LIMIT 1
+
+        """,
+
+        (today,)
+
+    ).fetchone()
+
+
+
+    conn.close()
+
+
+
+    if not inventory:
+
+        raise HTTPException(
+
+            status_code=404,
+
+            detail="Inventory information not found"
+
+        )
+
+
+
+    # -------------------------
+
+    # Forecast
+
+    # -------------------------
+
+
+
+    forecast = generate_forecast(product_id)
+
+
+
+    # -------------------------
+
+    # Recommendation
+
+    # -------------------------
+
+
+
+    purchase_quantity = calculate_recommendation(
+
+        forecast=forecast,
+
+        current_stock=inventory["current_stock"],
+
+        incoming_stock=inventory["incoming_stock"],
+
+        safety_stock=inventory["safety_stock"]
+
+    )
+
+
+
+    # -------------------------
+
+    # Explanation
+
+    # -------------------------
+
+
+
+    explanation = generate_explanation(
+
+        forecast=forecast,
+
+        current_stock=inventory["current_stock"],
+
+        incoming_stock=inventory["incoming_stock"],
+
+        safety_stock=inventory["safety_stock"],
+
+        event=dict(event) if event else None
+
+    )
+
+
+
+    return {
+
+        "product_id": product_id,
+
+        "product": product["name"],
+
+
+
+        "forecast": forecast,
+
+
+
+        "inventory": {
+
+            "current_stock": inventory["current_stock"],
+
+            "incoming_stock": inventory["incoming_stock"],
+
+            "safety_stock": inventory["safety_stock"]
+
+        },
+
+
+
+        "recommended_purchase": purchase_quantity,
+
+
+
+        "event": (
+
+            dict(event)
+
+            if event
+
+            else None
+
+        ),
+
+
+
+        "explanation": explanation
+
+    }
